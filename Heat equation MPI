@@ -1,0 +1,216 @@
+#include <mpi.h>
+#include <iostream>
+#include <cmath>
+using namespace std; 
+
+
+void initialize( double* u, int N )
+{
+    for ( int i = 1; i < N - 1; ++i ) {
+        u[ i ] = 1;
+    }
+    u[ 0 ] = 0.0;
+    u[ N - 1 ] = 0.0;
+
+}
+
+
+void analit_sol( double* u, const int N, const double l, const float T ) 
+{
+    
+    double baseline = 0.0001;
+    double PI = 3.14159265;
+    
+    for ( int i = 0; i < N; ++i ) {
+        int m = 0;
+        double eps = 1.0;
+        u[ i ] = 0;
+        while ( fabs( eps ) >= baseline ) {
+            eps = exp( -1 * ( PI * PI ) * ( 2 * m + 1 ) * ( 2 * m + 1 ) * T / (l * l)) / ( 2 * m + 1 )
+                * sin( PI * ( 2 * m + 1 ) * i * 0.1 / l );
+            u[ i ] += eps;
+            m++;
+        }
+        u[ i ] = ( 4 * 1 / PI ) * u[ i ];
+    }
+}
+
+
+void get_numeric_sol( const double* U0, double* Uf, const int size, const double left, const double right, const double dx, const double dt )
+{
+    double kur = dt / (dx * dx);
+
+    Uf[ 0 ] = U0[ 0 ] + kur * ( left - 2 * U0[ 0 ] + U0[ 1 ] );
+    Uf[ size - 1 ] = U0[ size - 1 ] + kur * ( U0[ size - 2 ] - 2 * U0[ size - 1 ] + right );
+    for ( int i = 1; i < size - 1; ++i ) {
+        Uf[ i ] = U0[ i ] + kur * ( U0[ i - 1 ] - 2 * U0[ i ] + U0[ i + 1 ] );
+    }
+}
+
+
+bool verification( double* u, const int N, const double l, const float T, const double baseline )
+{
+    double* ansol = new double[ 11 ];
+    
+    analit_sol( ansol, 11, l, T );
+
+    for ( int i = 0; i < 11; ++i ) {
+        if ( fabs( ansol[ i ] - ( u[ ( i * N / 10 ) ] ) ) > baseline )
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+
+void replacement( double** U0, double** Uf )
+{
+    double* tmp;
+    tmp = ( *U0 );
+    ( *U0 ) = ( *Uf );
+    ( *Uf ) = tmp;
+}
+
+
+void send_res_r_l( const double sLeft, const double sRight, double rLeft, double rRight, const int my_rank, const int total_ranks, const int id )
+{
+    MPI_Status status;
+
+    if ( my_rank < total_ranks - 1 )
+    {
+        MPI_Send(&sRight, 1, MPI_DOUBLE, my_rank + 1, id * 10, MPI_COMM_WORLD);
+    }
+    
+    if ( my_rank > 0 )
+    {
+        MPI_Send( &sLeft, 1, MPI_DOUBLE, my_rank - 1, id * 10 + 1, MPI_COMM_WORLD );
+    }
+    
+    if ( my_rank > 0 )
+    {
+        MPI_Recv( &rLeft, 1, MPI_DOUBLE, my_rank - 1, id * 10, MPI_COMM_WORLD, &status );
+    }
+
+    if ( my_rank < total_ranks - 1 )
+    {
+        MPI_Recv( &rRight, 1, MPI_DOUBLE, my_rank + 1, id * 10 + 1, MPI_COMM_WORLD, &status );
+    }
+}
+
+
+
+double* get_proc_num_sol(const double* u, const int N_op, const int M, const double tau, const double h, const int my_rank, const int total_ranks)
+{
+    double* U0 = (double*)malloc(N_op * sizeof(double));
+    double* Uf = (double*)malloc(N_op * sizeof(double));
+
+    for (int i = 0; i < N_op; ++i)
+    {
+        U0[i] = u[my_rank * N_op + i];
+        Uf[i] = 0;
+    }
+
+    for (int i = 1; i < M; ++i)
+    {
+        double sLeft = U0[0], sRight = U0[N_op - 1];
+        double rLeft = 0.0, rRight = 0.0;
+
+        send_res_r_l(sLeft, sRight, rLeft, rRight, my_rank, total_ranks, i);
+        get_numeric_sol(U0, Uf, N_op, rLeft, rRight, h, tau);
+        replacement(&U0, &Uf);
+
+    }
+    return U0;
+}
+
+
+
+
+
+
+int main(int argc, char** argv) 
+{
+    int total_ranks = 0;
+    int my_rank = 0;
+
+    MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &total_ranks);
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+
+    int* nums = NULL;
+    int* displs = NULL;
+    double* res = NULL;
+    double* res_of_proc = NULL;
+
+    int N_nodes = 501;
+    double h = 1.0 / (N_nodes - 1);
+    double tau = 0.000002;
+
+    double timeSum = 0.0;
+    double l = 1.0;
+    double T = 0.01;
+    int Time_steps = (T / tau) + 1;
+    int Kur = tau / (h * h);
+    double* u = new double[N_nodes];
+
+    int N_op = N_nodes / total_ranks;
+
+    initialize(u, N_nodes);
+
+    if (my_rank < N_nodes % total_ranks)
+    {
+        N_op = N_op + 1;
+    }
+
+    
+    auto startTime = MPI_Wtime();
+    
+
+    res_of_proc = get_proc_num_sol(u, N_op, Time_steps, tau, h, my_rank, total_ranks);
+
+    if (my_rank == 0)
+    {
+        nums = (int*)malloc(sizeof(int) * total_ranks);
+    }
+
+
+    MPI_Gather(&N_op, 1, MPI_INT, nums, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+
+    if (my_rank == 0)
+    {
+        displs = (int*)malloc(total_ranks * sizeof(int));
+        displs[0] = 0;
+        for (int i = 1; i < total_ranks; ++i) {
+            displs[i] = displs[i - 1] + nums[i - 1];
+        }
+        res = (double*)malloc(N_nodes * sizeof(double));
+    }
+    
+    MPI_Gatherv(res_of_proc, N_op, MPI_DOUBLE, res, nums, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    
+    auto endTime = MPI_Wtime();
+    double procTime = (endTime - startTime);
+    
+    MPI_Reduce(&procTime, &timeSum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    if (my_rank == 0)
+    {
+        if (verification(res, N_nodes - 1, l, T, 0.1) == false) {
+            cout << "Ver is false" << std::endl;
+        }
+        else {
+            cout << "Ver is True" << std::endl;
+        }
+        cout << "Process: " << total_ranks << endl;
+        cout << "Kurant number = " << tau / (h * h) << endl;
+        cout << "Step through space " << N_nodes << endl;
+        cout << "Number of time steps: " << Time_steps << endl;
+        cout << "Sec: " << timeSum / total_ranks << endl;
+    }
+
+
+    MPI_Finalize();
+    return 0;
+}
