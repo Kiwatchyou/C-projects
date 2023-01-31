@@ -1,0 +1,128 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <omp.h>
+#include <math.h>
+
+int Sizethr;
+
+
+/*
+* C = alpha * A * B + beta * C
+* A (M x N)
+* B (N x K)
+* C (M x K)
+* alpha = 1; beta = 0
+*/
+
+
+void draw_arrays(int a, int b, int c, double* x, double* y, double* z)
+{
+    printf("Massive A\n");
+
+    for (int i = 0; i < a; i++) {
+        for (int j = 0; j < b; j++) {
+            printf("%lf ", *(x + j * a + i));
+        }
+        printf("\n");
+    }
+
+    printf("Massive B\n");
+
+    for (int i = 0; i < b; i++) {
+        for (int j = 0; j < c; j++) {
+            printf("%lf ", *(y + j * b + i));
+        }
+        printf("\n");
+    }
+
+    printf("Massive C\n");
+
+    for (int i = 0; i < a; i++) {
+        for (int j = 0; j < c; j++) {
+            printf("%lf ", *(z + j * a + i));
+        }
+        printf("\n");
+    }
+}
+
+
+void arrays_filling(int a, int b, int c, double* x, double* y, double* z)
+{
+    srand(time(NULL));
+
+    for (int i = 0; i < a * b; i++) {
+        *(x + i) = ((double)(rand() % 900)) / 100.0;
+    }
+
+    for (int j = 0; j < b * c; j++) {
+        *(y + j) = ((double)(rand() % 900)) / 100.0;
+    }
+
+    for (int k = 0; k < a * c; k++) {
+        *(z + k) = 0.0;
+
+    }
+}
+
+
+void blas_dgemm(int M, int N, int K, double* A, double* B, double* C)
+{
+    int i;
+#pragma omp parallel for num_threads(Sizethr) collapse(2)
+    for (i = 0; i < M; i++) {
+        for (int j = 0; j < K; j++) {
+            for (int k = 0; k < N; k = k + 5) {
+                *(C + j * M + i) += (*(A + k * M + i)) * (*(B + j * N + k));
+                *(C + j * M + i) += (*(A + (k + 1) * M + i)) * (*(B + j * N + (k + 1)));
+                *(C + j * M + i) += (*(A + (k + 2) * M + i)) * (*(B + j * N + (k + 2)));
+                *(C + j * M + i) += (*(A + (k + 3) * M + i)) * (*(B + j * N + (k + 3)));
+                *(C + j * M + i) += (*(A + (k + 4) * M + i)) * (*(B + j * N + (k + 4)));
+            }
+        }
+    }
+}
+
+
+int main()
+{
+    int M, N, K;
+    double* A, * B, * C;
+    double t, t1;
+
+    M = 1000;
+    N = M;
+    K = M;
+
+    printf("M = %d, N = %d, K = %d\n", M, N, K);
+
+    A = (double*)malloc(sizeof(double) * M * N);
+    B = (double*)malloc(sizeof(double) * N * K);
+    C = (double*)malloc(sizeof(double) * M * K);
+
+    arrays_filling(M, N, K, A, B, C);
+
+    for (int i = 1; i < 17; i = i * 2) {
+        Sizethr = i;
+        t = omp_get_wtime();
+        blas_dgemm(M, N, K, A, B, C);
+        t = omp_get_wtime() - t;
+        if (i == 1)
+        {
+            t1 = t;
+        }
+        printf("Acceleration t_1/t_p : %lf , p = %d, t = %lf\n", t1 / t, Sizethr, t);
+    }
+
+
+    //              blas_dgemm(M, N, K, A, B, C);
+    //              draw_arrays( M, N, K, A, B, C);
+
+    printf("\n");
+
+    free(A);
+    free(B);
+    free(C);
+
+    return 0;
+}
