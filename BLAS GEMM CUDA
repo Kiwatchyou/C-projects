@@ -1,0 +1,129 @@
+#include <iostream>
+#include "cuda_runtime.h"
+#include "device_launch_parameters.h"
+#include <iomanip>
+#define N 1600
+
+using namespace std;
+
+
+__global__ void blasdgemcuda ( double* a, double* b, double* c )
+{
+	int x = blockDim.x * blockIdx.x + threadIdx.x;
+	int y = blockDim.y * blockIdx.y + threadIdx.y;
+
+	if ( x < N && y < N ){
+		for ( int i = 0; i < N; i++ ){
+			c[ x + y * N ] += a[ x + i * N ] * b[ i + y * N ];
+		}
+
+	}
+
+}
+
+void blas_dgemm(double* A, double* B, double* C)
+{
+	int i;
+#pragma omp parallel for num_threads(Sizethr) collapse(2)
+	for (i = 0; i < N; i++) {
+		for (int j = 0; j < N; j++) {
+			for (int k = 0; k < N; k++) {
+				*(C + j * N + i) += (*(A + k * N + i)) * (*(B + j * N + k));
+			}
+		}
+	}
+}
+
+double nev(double * A, double *B)
+{
+	double n;
+	n = 0.0;
+
+	for (int i = 0; i <= (N * N - 1); i++)
+	{
+		n = n + abs(A[i] - B[i]);
+	}
+	return n;
+}
+
+void initialization( double* a, double* b, double* c )
+{
+	for ( int i = 0; i <= ( N * N - 1 ); i++ )
+	{
+		*( a + i ) = rand() % 100;
+		*( b + i ) = rand() % 100;
+		*( c + i ) = 0;
+	}
+
+}
+
+__host__ int main()
+{
+	unsigned int mem_size = sizeof( double ) * N * N;
+
+	double* A, double* B, double* C, *Cb;
+	double* dev_A, double* dev_B, double* dev_C;
+
+	int threadsPerBlock = 32; // 1024 макс на блок
+	int blocksPerGrid = int((N / ((float)threadsPerBlock)) + 1);
+
+	dim3 blockDim(threadsPerBlock, threadsPerBlock, 1);
+	dim3 gridDim(blocksPerGrid, blocksPerGrid, 1);
+
+	A = (double*)malloc(mem_size);
+	B = (double*)malloc(mem_size);
+	C = (double*)malloc(mem_size);
+	Cb = (double*)malloc(mem_size);
+
+	cudaMalloc( ( void** ) &dev_A, mem_size );
+	cudaMalloc( ( void** ) &dev_B, mem_size );
+	cudaMalloc( ( void** ) &dev_C, mem_size );
+
+
+
+	initialization( A, B, C );
+	
+	for (int i = 0; i < N* N; i++)
+	{
+		Cb[i] = 0;
+	}
+	blas_dgemm(A, B, Cb);
+
+	cudaEvent_t start, stop;
+	float gpu_time = 0.0;
+
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	cudaEventRecord(start, 0);
+
+	cudaMemcpy(dev_A, A, mem_size, cudaMemcpyHostToDevice);
+	cudaMemcpy(dev_B, B, mem_size, cudaMemcpyHostToDevice);
+
+	blasdgemcuda <<< gridDim, blockDim >>> (dev_A, dev_B, dev_C);
+
+	cudaMemcpy(C, dev_C, mem_size, cudaMemcpyDeviceToHost);
+
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+
+	cudaEventElapsedTime(&gpu_time, start, stop);
+
+	cout << "Time GPU=" << gpu_time << " ms";
+
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
+	
+	double t;
+	t = nev(C, Cb);
+	printf("Neviyzska = %f", t);
+
+
+	cudaFree( dev_A );
+	cudaFree( dev_B );
+	cudaFree( dev_C );
+
+	free( A );
+	free( B );
+	free( C );
+	free(Cb);
+}
