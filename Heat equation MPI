@@ -125,10 +125,6 @@ double* get_proc_num_sol(const double* u, const int N_op, const int M, const dou
 }
 
 
-
-
-
-
 int main(int argc, char** argv) 
 {
     int total_ranks = 0;
